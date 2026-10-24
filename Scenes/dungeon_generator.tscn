@@ -1,6 +1,13 @@
 [gd_scene format=3 uid="uid://deamfuovs1wyr"]
 
 [ext_resource type="Script" uid="uid://rbq77n74d874" path="res://Scripts/dungeon_generator.gd" id="1_x1wjd"]
+[ext_resource type="TileSet" uid="uid://dpds0uwbn78" path="res://Tilesets/dungeon_tileset.tres" id="2_mvshf"]
 
 [node name="DungeonGenerator" type="Node2D" unique_id=1014127506]
 script = ExtResource("1_x1wjd")
+
+[node name="FloorLayer" type="TileMapLayer" parent="." unique_id=1287089869]
+tile_set = ExtResource("2_mvshf")
+
+[node name="WallLayer" type="TileMapLayer" parent="." unique_id=18622455]
+tile_set = ExtResource("2_mvshf")

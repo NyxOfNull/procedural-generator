@@ -61,6 +61,30 @@ signal dungeon_generated(success: bool, used_seed: int)
 @export var show_hud: bool = true
 @export var show_debug_overlay: bool = false
 
+
+@export_group("Tile Layers")
+## Assign the FloorLayer / WallLayer nodes here. If left empty, the script looks
+## for direct children named "FloorLayer" and "WallLayer".
+@export var floor_layer: TileMapLayer
+@export var wall_layer: TileMapLayer
+
+@export_group("Floor tiles (you must fill these in)")
+## Source ID of the atlas inside the FloorLayer's TileSet. -1 = not configured.
+@export var floor_source_id: int = 0
+## Atlas coordinates of the tiles to use. Several entries = random variation per tile.
+@export var room_floor_tiles: Array[Vector2i] = [Vector2i(1,1)]
+@export var corridor_floor_tiles: Array[Vector2i] = [Vector2i(1,1)]
+@export var door_floor_tiles: Array[Vector2i] = [Vector2i(7,1)]
+
+@export_group("Wall tiles (you must fill these in)")
+@export var wall_source_id: int = 0
+## Used for walls that touch a floor tile on a side (wall_grid == 2).
+@export var wall_face_tiles: Array[Vector2i] = [Vector2i(1,0)]
+## Used for diagonal-only walls (wall_grid == 1). If empty, wall_face_tiles is used.
+@export var wall_corner_tiles: Array[Vector2i] = [Vector2i(3,0)]
+## ON = pick walls by neighbour layout using the two tables below.
+@export var use_wall_variants: bool = false
+
 # ------------------------------------------------------------------
 # Visual style
 # ------------------------------------------------------------------
@@ -118,6 +142,21 @@ const ROLE_EXIT := 2
 # Direction order matters: index+1 = clockwise turn, index+3 = counter-clockwise turn.
 const DIRS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]
 const TURNS: Array[int] = [0, 1, 3]
+
+
+const UNSET_TILE := Vector2i(-1, -1)
+
+# Optional wall variants. Filled IN CODE (not the Inspector) so unfilled entries are
+# truly "missing" rather than defaulting to atlas (0, 0). Keys/bits are described in
+# the section "Wall variants" of the explanation. Example entry: 1: Vector2i(3, 0),
+var wall_variant_by_mask: Dictionary = {
+}
+var wall_variant_by_diagonal: Dictionary = {
+}
+
+var _overlay: Node2D
+var stat_floor_cells: int = 0
+var stat_wall_cells: int = 0
 
 # ==================================================================
 # DATA TYPES
@@ -240,7 +279,10 @@ var stats_label: Label
 # ==================================================================
 
 func _ready() -> void:
+	_resolve_layers()
+	_create_overlay()
 	_create_hud()
+	
 	var first_seed := fixed_seed if use_fixed_seed else _random_seed()
 	generate_dungeon(first_seed)
 
@@ -261,7 +303,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			generate_new_random_dungeon()
 		KEY_G:
 			show_debug_overlay = not show_debug_overlay
-			queue_redraw()
+			_request_redraw()
 		KEY_H:
 			if hud != null:
 				hud.visible = not hud.visible
@@ -430,11 +472,12 @@ func generate_dungeon(seed_to_use: int = -1) -> void:
 	_compute_walls()
 	_assign_roles()
 	_validate_layout()
+	_render_tilemaps()
 	_finalize_status(complete, pruned)
 
 	stat_ms = Time.get_ticks_msec() - t_start
 	_count_tiles()
-	queue_redraw()
+	_request_redraw() 
 	_update_hud()
 	_print_report()
 	dungeon_generated.emit(generation_ok, current_seed)
@@ -1597,6 +1640,7 @@ func _stats_lines() -> PackedStringArray:
 	lines.append("Seed: %d" % current_seed)
 	lines.append("Rooms: %d / %d    Corridors: %d (%d loops)" % [rooms.size(), room_count, connections.size(), extras])
 	lines.append("Tiles: %d room, %d corridor, %d door" % [stat_room_tiles, stat_corridor_tiles, stat_door_tiles])
+	lines.append("Tilemap cells: %d floor, %d wall" % [stat_floor_cells, stat_wall_cells])
 	if start_room_id >= 0 and exit_room_id >= 0:
 		lines.append("Start: room %d    Exit: room %d (route ~%d tiles)" % [start_room_id, exit_room_id, int(start_exit_distance)])
 	lines.append("Connectivity: %s" % ("all rooms reachable" if all_rooms_connected else "BROKEN"))
@@ -1638,68 +1682,126 @@ func _print_report() -> void:
 	for message in errors:
 		push_error("[Dungeon] " + message)
 
+## ==================================================================
+## DRAWING
+## ==================================================================
+#
+#func _draw() -> void:
+	#draw_rect(Rect2(Vector2.ZERO, Vector2(dungeon_width, dungeon_height) * float(tile_size)), BACKGROUND_COLOR)
+	#if tiles.size() != dungeon_width * dungeon_height:
+		#return
+#
+	## Walls first.
+	#for y in range(dungeon_height):
+		#for x in range(dungeon_width):
+			#var wv := wall_grid[y * dungeon_width + x]
+			#if wv != 0:
+				#_draw_tile(x, y, WALL_FACE_COLOR if wv == 2 else WALL_COLOR)
+#
+	## Floors with subtle per-tile and per-room variation, plus edge shading.
+	#for y in range(dungeon_height):
+		#for x in range(dungeon_width):
+			#var i := y * dungeon_width + x
+			#var t := tiles[i]
+			#if t == T_EMPTY:
+				#continue
+			#var noise := _cell_noise(Vector2i(x, y)) - 0.5
+			#var color: Color
+			#if t == T_ROOM:
+				#color = _shade(ROOM_COLOR, 1.0 + rooms[room_grid[i]].tone + noise * FLOOR_NOISE_STRENGTH)
+			#elif t == T_CORRIDOR:
+				#color = _shade(CORRIDOR_COLOR, 1.0 + noise * FLOOR_NOISE_STRENGTH * 0.75)
+			#else:
+				#color = DOOR_COLOR
+			#_draw_tile(x, y, color)
+			#_draw_floor_edges(x, y)
+#
+	#_draw_role_markers()
+	#if show_debug_overlay:
+		#_draw_debug_overlay()
+#
+#
+#func _draw_tile(x: int, y: int, color: Color) -> void:
+	#draw_rect(Rect2(x * tile_size, y * tile_size, tile_size, tile_size), color)
+#
+#
+## Thin dark strip on floor edges that touch a wall: gives depth and keeps
+## doorway jambs and corridor edges readable at 16 px.
+#func _draw_floor_edges(x: int, y: int) -> void:
+	#var ts := float(tile_size)
+	#var s := ts * 0.125
+	#var px := x * ts
+	#var py := y * ts
+	#if _is_wall_xy(x, y - 1):
+		#draw_rect(Rect2(px, py, ts, s), EDGE_SHADE_COLOR)
+	#if _is_wall_xy(x, y + 1):
+		#draw_rect(Rect2(px, py + ts - s, ts, s), EDGE_SHADE_COLOR)
+	#if _is_wall_xy(x - 1, y):
+		#draw_rect(Rect2(px, py, s, ts), EDGE_SHADE_COLOR)
+	#if _is_wall_xy(x + 1, y):
+		#draw_rect(Rect2(px + ts - s, py, s, ts), EDGE_SHADE_COLOR)
+#
+#
+#func _shade(color: Color, factor: float) -> Color:
+	#return Color(color.r * factor, color.g * factor, color.b * factor)
+#
+#
+## Deterministic 0..1 noise per tile (depends on the seed, so a seed always looks the same).
+#func _cell_noise(cell: Vector2i) -> float:
+	#var h: int = (cell.x * 73856093) ^ (cell.y * 19349663) ^ (current_seed * 83492791)
+	#h = (h ^ (h >> 13)) * 1274126177
+	#return float(h & 1023) / 1023.0
+#
+#
+#func _draw_role_markers() -> void:
+	#var font := ThemeDB.fallback_font
+	#var ts := float(tile_size)
+	#for room in rooms:
+		#if room.role == ROLE_NORMAL:
+			#continue
+		#var is_start := room.role == ROLE_START
+		#var color := START_COLOR if is_start else EXIT_COLOR
+		#var rect_px := Rect2(Vector2(room.rect.position) * ts, Vector2(room.rect.size) * ts)
+		#draw_rect(rect_px, Color(color.r, color.g, color.b, 0.16))
+		#var center := rect_px.get_center()
+		#draw_circle(center, ts * 0.55, Color(0, 0, 0, 0.45))
+		#draw_circle(center, ts * 0.42, color)
+		#draw_string(font, center + Vector2(-ts * 0.5, ts * 0.2), "S" if is_start else "E",
+			#HORIZONTAL_ALIGNMENT_CENTER, ts, int(ts * 0.6), Color(0.08, 0.08, 0.08))
+#
+#
+#func _draw_debug_overlay() -> void:
+	#var font := ThemeDB.fallback_font
+	#var ts := float(tile_size)
+	#var half := corridor_width * 0.5
+	#for conn in connections:
+		#if conn.anchors.size() < 2:
+			#continue
+		#var points := PackedVector2Array()
+		#for anchor in conn.anchors:
+			#points.append((Vector2(anchor) + Vector2(half, half)) * ts)
+		#draw_polyline(points, EXTRA_LINE_COLOR if conn.is_extra else TREE_LINE_COLOR, 2.0)
+	#for room in rooms:
+		#var p := Vector2(room.rect.position) * ts + Vector2(3, 12)
+		#draw_string(font, p, str(room.id), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+
+
 # ==================================================================
-# DRAWING
+# DRAWING (background on this node; markers/debug on the overlay above the tiles)
 # ==================================================================
 
 func _draw() -> void:
+	# Background only. Child nodes (FloorLayer, WallLayer, overlay) draw after this.
 	draw_rect(Rect2(Vector2.ZERO, Vector2(dungeon_width, dungeon_height) * float(tile_size)), BACKGROUND_COLOR)
+
+
+# Called by the overlay's `draw` signal, so the draw_* calls below target the overlay.
+func _draw_overlay() -> void:
 	if tiles.size() != dungeon_width * dungeon_height:
 		return
-
-	# Walls first.
-	for y in range(dungeon_height):
-		for x in range(dungeon_width):
-			var wv := wall_grid[y * dungeon_width + x]
-			if wv != 0:
-				_draw_tile(x, y, WALL_FACE_COLOR if wv == 2 else WALL_COLOR)
-
-	# Floors with subtle per-tile and per-room variation, plus edge shading.
-	for y in range(dungeon_height):
-		for x in range(dungeon_width):
-			var i := y * dungeon_width + x
-			var t := tiles[i]
-			if t == T_EMPTY:
-				continue
-			var noise := _cell_noise(Vector2i(x, y)) - 0.5
-			var color: Color
-			if t == T_ROOM:
-				color = _shade(ROOM_COLOR, 1.0 + rooms[room_grid[i]].tone + noise * FLOOR_NOISE_STRENGTH)
-			elif t == T_CORRIDOR:
-				color = _shade(CORRIDOR_COLOR, 1.0 + noise * FLOOR_NOISE_STRENGTH * 0.75)
-			else:
-				color = DOOR_COLOR
-			_draw_tile(x, y, color)
-			_draw_floor_edges(x, y)
-
 	_draw_role_markers()
 	if show_debug_overlay:
 		_draw_debug_overlay()
-
-
-func _draw_tile(x: int, y: int, color: Color) -> void:
-	draw_rect(Rect2(x * tile_size, y * tile_size, tile_size, tile_size), color)
-
-
-# Thin dark strip on floor edges that touch a wall: gives depth and keeps
-# doorway jambs and corridor edges readable at 16 px.
-func _draw_floor_edges(x: int, y: int) -> void:
-	var ts := float(tile_size)
-	var s := ts * 0.125
-	var px := x * ts
-	var py := y * ts
-	if _is_wall_xy(x, y - 1):
-		draw_rect(Rect2(px, py, ts, s), EDGE_SHADE_COLOR)
-	if _is_wall_xy(x, y + 1):
-		draw_rect(Rect2(px, py + ts - s, ts, s), EDGE_SHADE_COLOR)
-	if _is_wall_xy(x - 1, y):
-		draw_rect(Rect2(px, py, s, ts), EDGE_SHADE_COLOR)
-	if _is_wall_xy(x + 1, y):
-		draw_rect(Rect2(px + ts - s, py, s, ts), EDGE_SHADE_COLOR)
-
-
-func _shade(color: Color, factor: float) -> Color:
-	return Color(color.r * factor, color.g * factor, color.b * factor)
 
 
 # Deterministic 0..1 noise per tile (depends on the seed, so a seed always looks the same).
@@ -1718,11 +1820,11 @@ func _draw_role_markers() -> void:
 		var is_start := room.role == ROLE_START
 		var color := START_COLOR if is_start else EXIT_COLOR
 		var rect_px := Rect2(Vector2(room.rect.position) * ts, Vector2(room.rect.size) * ts)
-		draw_rect(rect_px, Color(color.r, color.g, color.b, 0.16))
+		_overlay.draw_rect(rect_px, Color(color.r, color.g, color.b, 0.16))
 		var center := rect_px.get_center()
-		draw_circle(center, ts * 0.55, Color(0, 0, 0, 0.45))
-		draw_circle(center, ts * 0.42, color)
-		draw_string(font, center + Vector2(-ts * 0.5, ts * 0.2), "S" if is_start else "E",
+		_overlay.draw_circle(center, ts * 0.55, Color(0, 0, 0, 0.45))
+		_overlay.draw_circle(center, ts * 0.42, color)
+		_overlay.draw_string(font, center + Vector2(-ts * 0.5, ts * 0.2), "S" if is_start else "E",
 			HORIZONTAL_ALIGNMENT_CENTER, ts, int(ts * 0.6), Color(0.08, 0.08, 0.08))
 
 
@@ -1736,7 +1838,191 @@ func _draw_debug_overlay() -> void:
 		var points := PackedVector2Array()
 		for anchor in conn.anchors:
 			points.append((Vector2(anchor) + Vector2(half, half)) * ts)
-		draw_polyline(points, EXTRA_LINE_COLOR if conn.is_extra else TREE_LINE_COLOR, 2.0)
+		_overlay.draw_polyline(points, EXTRA_LINE_COLOR if conn.is_extra else TREE_LINE_COLOR, 2.0)
 	for room in rooms:
 		var p := Vector2(room.rect.position) * ts + Vector2(3, 12)
-		draw_string(font, p, str(room.id), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+		_overlay.draw_string(font, p, str(room.id), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+
+
+# ==================================================================
+# TILEMAP RENDERING
+# ==================================================================
+
+func _resolve_layers() -> void:
+	if floor_layer == null:
+		floor_layer = get_node_or_null("FloorLayer") as TileMapLayer
+	if wall_layer == null:
+		wall_layer = get_node_or_null("WallLayer") as TileMapLayer
+	for layer in [floor_layer, wall_layer]:
+		if layer != null:
+			layer.position = Vector2.ZERO   # cell (x, y) must sit at pixel (x, y) * tile_size
+			layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # crisp pixel art
+	if floor_layer != null:
+		floor_layer.collision_enabled = false   # floors/doors/corridors never block
+
+
+func _create_overlay() -> void:
+	if _overlay != null:
+		return
+	_overlay = Node2D.new()
+	_overlay.name = "DebugOverlay"
+	add_child(_overlay)   # added after the layers => drawn above them
+	_overlay.draw.connect(_draw_overlay)
+
+
+func _request_redraw() -> void:
+	queue_redraw()
+	if _overlay != null:
+		_overlay.queue_redraw()
+
+
+# Clears both layers and repopulates them from `tiles` / `wall_grid`.
+func _render_tilemaps() -> void:
+	stat_floor_cells = 0
+	stat_wall_cells = 0
+	_resolve_layers()
+	# Always clear whatever exists, so old dungeons never linger.
+	if floor_layer != null:
+		floor_layer.clear()
+	if wall_layer != null:
+		wall_layer.clear()
+	if floor_layer == null or wall_layer == null:
+		warnings.append("FloorLayer and/or WallLayer not assigned - nothing was rendered (see Tile Layers in the Inspector).")
+		return
+
+	var floor_ok := _check_layer(floor_layer, "FloorLayer")
+	var wall_ok := _check_layer(wall_layer, "WallLayer")
+
+	var room_t := _clean_tiles(floor_layer, floor_source_id, room_floor_tiles, "room_floor_tiles")
+	var corr_t := _clean_tiles(floor_layer, floor_source_id, corridor_floor_tiles, "corridor_floor_tiles")
+	var door_t := _clean_tiles(floor_layer, floor_source_id, door_floor_tiles, "door_floor_tiles")
+	var face_t := _clean_tiles(wall_layer, wall_source_id, wall_face_tiles, "wall_face_tiles")
+	var corner_t := _clean_tiles(wall_layer, wall_source_id, wall_corner_tiles, "wall_corner_tiles")
+	var by_mask := _clean_tile_table(wall_layer, wall_source_id, wall_variant_by_mask, "wall_variant_by_mask")
+	var by_diag := _clean_tile_table(wall_layer, wall_source_id, wall_variant_by_diagonal, "wall_variant_by_diagonal")
+
+	var placed_floor := 0
+	var placed_wall := 0
+	var skipped_floor := 0
+	var skipped_wall := 0
+
+	for y in range(dungeon_height):
+		for x in range(dungeon_width):
+			var i := y * dungeon_width + x
+			var cell := Vector2i(x, y)
+			var t := tiles[i]
+			var level := wall_grid[i]
+
+			if t != T_EMPTY:
+				# Walkable. A wall here would block a doorway, so it is never placed.
+				if level != 0:
+					_add_error("Wall data overlaps walkable floor at (%d, %d)." % [x, y])
+				if not floor_ok:
+					continue
+				var list := room_t
+				if t == T_CORRIDOR:
+					list = corr_t
+				elif t == T_DOOR:
+					list = door_t
+				if list.is_empty():
+					skipped_floor += 1
+				else:
+					floor_layer.set_cell(cell, floor_source_id, list[_variant_index(cell, list.size())])
+					placed_floor += 1
+			elif level != 0 and wall_ok:
+				var pick := _pick_wall_tile(cell, level, face_t, corner_t, by_mask, by_diag)
+				if pick == UNSET_TILE:
+					skipped_wall += 1
+				else:
+					wall_layer.set_cell(cell, wall_source_id, pick)
+					placed_wall += 1
+
+	stat_floor_cells = floor_layer.get_used_cells().size()
+	stat_wall_cells = wall_layer.get_used_cells().size()
+	# If clearing ever failed, these counts would not match what we just placed.
+	if stat_floor_cells != placed_floor:
+		_add_error("FloorLayer holds %d cells but %d were placed." % [stat_floor_cells, placed_floor])
+	if stat_wall_cells != placed_wall:
+		_add_error("WallLayer holds %d cells but %d were placed." % [stat_wall_cells, placed_wall])
+	if skipped_floor > 0:
+		warnings.append("%d floor tile(s) not drawn: no valid tile configured for their type." % skipped_floor)
+	if skipped_wall > 0:
+		warnings.append("%d wall tile(s) not drawn: no valid wall tile configured." % skipped_wall)
+
+
+func _check_layer(layer: TileMapLayer, label: String) -> bool:
+	if layer.tile_set == null:
+		warnings.append("%s has no TileSet assigned." % label)
+		return false
+	if layer.tile_set.tile_size != Vector2i(tile_size, tile_size):
+		warnings.append("%s TileSet tile size is %s but tile_size is %d - tiles will not line up." % [label, layer.tile_set.tile_size, tile_size])
+	return true
+
+
+func _atlas_tile_exists(layer: TileMapLayer, source_id: int, coords: Vector2i) -> bool:
+	if layer == null or layer.tile_set == null:
+		return false
+	if not layer.tile_set.has_source(source_id):
+		return false
+	var source := layer.tile_set.get_source(source_id) as TileSetAtlasSource
+	return source != null and source.has_tile(coords)
+
+
+# Keeps only the entries that really exist in the TileSet (so set_cell never errors).
+func _clean_tiles(layer: TileMapLayer, source_id: int, list: Array[Vector2i], label: String) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for coords in list:
+		if _atlas_tile_exists(layer, source_id, coords):
+			out.append(coords)
+		else:
+			warnings.append("%s: atlas tile %s does not exist in source %d." % [label, coords, source_id])
+	return out
+
+
+func _clean_tile_table(layer: TileMapLayer, source_id: int, table: Dictionary, label: String) -> Dictionary:
+	var out := {}
+	for key in table:
+		var coords: Vector2i = table[key]
+		if _atlas_tile_exists(layer, source_id, coords):
+			out[key] = coords
+		else:
+			warnings.append("%s[%s]: atlas tile %s does not exist in source %d." % [label, key, coords, source_id])
+	return out
+
+
+# Deterministic variant choice (depends on cell + seed, never touches `rng`).
+func _variant_index(cell: Vector2i, count: int) -> int:
+	return mini(int(_cell_noise(cell) * count), count - 1)
+
+
+# Chooses the atlas tile for a wall cell from its neighbours.
+func _pick_wall_tile(cell: Vector2i, level: int, face_t: Array[Vector2i], corner_t: Array[Vector2i],
+		by_mask: Dictionary, by_diag: Dictionary) -> Vector2i:
+	if use_wall_variants:
+		# Orthogonal bits: floor to the N=1, E=2, S=4, W=8 of this wall tile.
+		var ortho := 0
+		if _tile_at(cell.x, cell.y - 1) != T_EMPTY: ortho |= 1
+		if _tile_at(cell.x + 1, cell.y) != T_EMPTY: ortho |= 2
+		if _tile_at(cell.x, cell.y + 1) != T_EMPTY: ortho |= 4
+		if _tile_at(cell.x - 1, cell.y) != T_EMPTY: ortho |= 8
+		if ortho != 0:
+			if by_mask.has(ortho):
+				var v: Vector2i = by_mask[ortho]
+				return v
+		else:
+			# Diagonal-only wall: floor to the NE=1, SE=2, SW=4, NW=8.
+			var diag := 0
+			if _tile_at(cell.x + 1, cell.y - 1) != T_EMPTY: diag |= 1
+			if _tile_at(cell.x + 1, cell.y + 1) != T_EMPTY: diag |= 2
+			if _tile_at(cell.x - 1, cell.y + 1) != T_EMPTY: diag |= 4
+			if _tile_at(cell.x - 1, cell.y - 1) != T_EMPTY: diag |= 8
+			if by_diag.has(diag):
+				var v2: Vector2i = by_diag[diag]
+				return v2
+
+	var generic: Array[Vector2i] = face_t if level == 2 else corner_t
+	if generic.is_empty():
+		generic = face_t
+	if generic.is_empty():
+		return UNSET_TILE
+	return generic[_variant_index(cell, generic.size())]

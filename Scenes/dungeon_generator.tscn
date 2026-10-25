@@ -5,6 +5,7 @@
 
 [node name="DungeonGenerator" type="Node2D" unique_id=1014127506]
 script = ExtResource("1_x1wjd")
+use_wall_variants = true
 
 [node name="FloorLayer" type="TileMapLayer" parent="." unique_id=1287089869]
 tile_set = ExtResource("2_mvshf")

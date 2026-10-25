@@ -72,16 +72,16 @@ signal dungeon_generated(success: bool, used_seed: int)
 ## Source ID of the atlas inside the FloorLayer's TileSet. -1 = not configured.
 @export var floor_source_id: int = 0
 ## Atlas coordinates of the tiles to use. Several entries = random variation per tile.
-@export var room_floor_tiles: Array[Vector2i] = [Vector2i(1,1)]
-@export var corridor_floor_tiles: Array[Vector2i] = [Vector2i(1,1)]
-@export var door_floor_tiles: Array[Vector2i] = [Vector2i(7,1)]
+@export var room_floor_tiles: Array[Vector2i] = [Vector2i(1, 1)]
+@export var corridor_floor_tiles: Array[Vector2i] = [Vector2i(9, 5), Vector2i(10,5)]
+@export var door_floor_tiles: Array[Vector2i] = [Vector2i(13,4)]
 
 @export_group("Wall tiles (you must fill these in)")
 @export var wall_source_id: int = 0
 ## Used for walls that touch a floor tile on a side (wall_grid == 2).
-@export var wall_face_tiles: Array[Vector2i] = [Vector2i(1,0)]
+@export var wall_face_tiles: Array[Vector2i] = [Vector2i(1, 0)]
 ## Used for diagonal-only walls (wall_grid == 1). If empty, wall_face_tiles is used.
-@export var wall_corner_tiles: Array[Vector2i] = [Vector2i(3,0)]
+@export var wall_corner_tiles: Array[Vector2i] = [Vector2i(3, 0)]
 ## ON = pick walls by neighbour layout using the two tables below.
 @export var use_wall_variants: bool = false
 
@@ -89,8 +89,8 @@ signal dungeon_generated(success: bool, used_seed: int)
 # Visual style
 # ------------------------------------------------------------------
 const BACKGROUND_COLOR := Color(0.10, 0.095, 0.11)
-const WALL_COLOR := Color(0.20, 0.185, 0.22)       # corner / diagonal walls
-const WALL_FACE_COLOR := Color(0.27, 0.25, 0.29)   # walls directly touching floor
+const WALL_COLOR := Color(0.20, 0.185, 0.22) # corner / diagonal walls
+const WALL_FACE_COLOR := Color(0.27, 0.25, 0.29) # walls directly touching floor
 const ROOM_COLOR := Color(0.39, 0.34, 0.30)
 const CORRIDOR_COLOR := Color(0.60, 0.48, 0.32)
 const DOOR_COLOR := Color(0.74, 0.62, 0.42)
@@ -105,25 +105,25 @@ const ROOM_TONE_RANGE := 0.04
 # ------------------------------------------------------------------
 # Routing / planning tuning (rarely needs changing)
 # ------------------------------------------------------------------
-const COST_FRESH := 1.0        # carving brand-new corridor
-const COST_REUSE := 0.75       # footprint fully on an existing corridor
-const COST_PARTIAL := 1.5      # footprint partly overlapping a corridor (crossings)
-const COST_TOUCH := 2.5        # fresh corridor hugging another one (avoids merged wide halls)
-const TURN_PENALTY := 2.0      # fewer bends = cleaner corridors
-const ENTRY_PENALTY := 5.0     # leaving/entering a doorway sideways instead of straight on
+const COST_FRESH := 1.0 # carving brand-new corridor
+const COST_REUSE := 0.75 # footprint fully on an existing corridor
+const COST_PARTIAL := 1.5 # footprint partly overlapping a corridor (crossings)
+const COST_TOUCH := 2.5 # fresh corridor hugging another one (avoids merged wide halls)
+const TURN_PENALTY := 2.0 # fewer bends = cleaner corridors
+const ENTRY_PENALTY := 5.0 # leaving/entering a doorway sideways instead of straight on
 const HEURISTIC_WEIGHT := 0.75 # must be <= cheapest step cost (COST_REUSE) to stay admissible
-const MST_JITTER := 0.35       # random weight noise so layouts are not always the same tree
+const MST_JITTER := 0.35 # random weight noise so layouts are not always the same tree
 const DOOR_OPTIONS_PER_SIDE := 2
-const PREFERRED_DOOR_COMBOS := 8   # door pairs compared before accepting the best one
-const MAX_DOOR_COMBOS := 16        # hard cap when nothing has worked yet
-const DOOR_MIN_SEPARATION := 4     # clear tiles needed between two doors on one wall
-const COST_CRAMPED := 2.0          # corridor block touching a room's wall ring (avoids cramped squeezes)
-const EXTRA_MIN_FRESH := 3         # a loop must carve at least this many new blocks (no stubby bridges)
-const EXTRA_MAX_FRESH := 24        # ...and at most this many (no long tangles)
-const JOIN_DOOR_CLEARANCE := 2     # loops may not join a corridor within this many blocks of a doorway
-const MISALIGN_WEIGHT := 1.5       # prefers door pairs that allow straight corridors
+const PREFERRED_DOOR_COMBOS := 8 # door pairs compared before accepting the best one
+const MAX_DOOR_COMBOS := 16 # hard cap when nothing has worked yet
+const DOOR_MIN_SEPARATION := 4 # clear tiles needed between two doors on one wall
+const COST_CRAMPED := 2.0 # corridor block touching a room's wall ring (avoids cramped squeezes)
+const EXTRA_MIN_FRESH := 3 # a loop must carve at least this many new blocks (no stubby bridges)
+const EXTRA_MAX_FRESH := 24 # ...and at most this many (no long tangles)
+const JOIN_DOOR_CLEARANCE := 2 # loops may not join a corridor within this many blocks of a doorway
+const MISALIGN_WEIGHT := 1.5 # prefers door pairs that allow straight corridors
 const EXTRA_NEIGHBOR_CANDIDATES := 3
-const EXTRA_MIN_HOP_DISTANCE := 3  # a loop must shortcut a route of at least this many corridors
+const EXTRA_MIN_HOP_DISTANCE := 3 # a loop must shortcut a route of at least this many corridors
 const EXTRA_PATH_FACTOR := 1.5
 const EXTRA_PATH_SLACK := 6
 const MAX_FALLBACK_PAIR_TRIES := 30
@@ -150,8 +150,27 @@ const UNSET_TILE := Vector2i(-1, -1)
 # truly "missing" rather than defaulting to atlas (0, 0). Keys/bits are described in
 # the section "Wall variants" of the explanation. Example entry: 1: Vector2i(3, 0),
 var wall_variant_by_mask: Dictionary = {
+	1: Vector2i(1, 2), #North (Floor Direction)
+	2: Vector2i(0, 1), #East
+	4: Vector2i(1, 0), #South
+	8: Vector2i(2, 1), #West
+	3: Vector2i(0, 2), #NE
+	6: Vector2i(0, 0), #SE
+	12: Vector2i(2, 0), #SW
+	9: Vector2i(2, 2), #NW
+	5: Vector2i(1, 2), #NS
+	10: Vector2i(2, 1), #EW
+	7: Vector2i(9, 3), #Floor is 3 or four sides
+	11: Vector2i(9, 3), #||
+	13: Vector2i(9, 3), #||
+	14: Vector2i(9, 3), #||
+	15: Vector2i(9, 3)  #||
 }
 var wall_variant_by_diagonal: Dictionary = {
+	1: Vector2i(0, 2), #NE (Floor direction)
+	2: Vector2i(0, 0), #SE
+	4: Vector2i(2, 0), #SW
+	8: Vector2i(2, 2)  #NW
 }
 
 var _overlay: Node2D
@@ -164,23 +183,23 @@ var stat_wall_cells: int = 0
 
 class DungeonRoom extends RefCounted:
 	var id: int = 0
-	var rect: Rect2i = Rect2i()        # FLOOR area in tile coordinates (walls are outside it)
-	var role: int = 0                  # ROLE_* constant
-	var tone: float = 0.0              # per-room brightness variation
-	var neighbors: Array[int] = []     # ids of directly connected rooms
+	var rect: Rect2i = Rect2i() # FLOOR area in tile coordinates (walls are outside it)
+	var role: int = 0 # ROLE_* constant
+	var tone: float = 0.0 # per-room brightness variation
+	var neighbors: Array[int] = [] # ids of directly connected rooms
 	var door_tiles: Array[Vector2i] = []
 
 class Connection extends RefCounted:
 	var a: int = 0
 	var b: int = 0
-	var is_extra: bool = false         # true = loop corridor, false = spanning-tree corridor
+	var is_extra: bool = false # true = loop corridor, false = spanning-tree corridor
 	var doors_a: Array[Vector2i] = []
 	var doors_b: Array[Vector2i] = []
-	var anchors: Array[Vector2i] = []  # corridor path; each anchor = a w*w tile block
+	var anchors: Array[Vector2i] = [] # corridor path; each anchor = a w*w tile block
 
 class DoorOption extends RefCounted:
 	var side: Vector2i = Vector2i.ZERO # outward normal of the wall the door is in
-	var tiles: Array[Vector2i] = []    # door gap tiles (inside the wall ring)
+	var tiles: Array[Vector2i] = [] # door gap tiles (inside the wall ring)
 	var anchor: Vector2i = Vector2i.ZERO # first corridor block, directly outside the door
 
 class MinHeap extends RefCounted:
@@ -241,10 +260,10 @@ var current_seed: int = 0
 var rooms: Array[DungeonRoom] = []
 var connections: Array[Connection] = []
 
-var tiles := PackedByteArray()        # T_* per cell
-var room_grid := PackedInt32Array()   # room id per room-floor cell, else -1
-var wall_grid := PackedByteArray()    # 0 none, 1 corner/diagonal wall, 2 wall touching floor
-var anchor_ok := PackedByteArray()    # 1 = a corridor block may start at this cell
+var tiles := PackedByteArray() # T_* per cell
+var room_grid := PackedInt32Array() # room id per room-floor cell, else -1
+var wall_grid := PackedByteArray() # 0 none, 1 corner/diagonal wall, 2 wall touching floor
+var anchor_ok := PackedByteArray() # 1 = a corridor block may start at this cell
 var ring_blocked := PackedByteArray() # 1 = room floor or its wall ring
 
 var start_room_id: int = -1
@@ -311,7 +330,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _create_hud() -> void:
 	if hud != null:
-		return  # never create the UI twice
+		return # never create the UI twice
 
 	hud = PanelContainer.new()
 	hud.position = Vector2(8, 8)
@@ -362,7 +381,7 @@ func _on_seed_submitted(text: String) -> void:
 	if trimmed.is_valid_int():
 		parsed_seed = absi(trimmed.to_int())
 	else:
-		parsed_seed = trimmed.hash() & 0x7FFFFFFF  # any word works as a seed
+		parsed_seed = trimmed.hash() & 0x7FFFFFFF # any word works as a seed
 	seed_edit.release_focus()
 	generate_dungeon(parsed_seed)
 
@@ -410,7 +429,7 @@ func generate_dungeon(seed_to_use: int = -1) -> void:
 	var t_start := Time.get_ticks_msec()
 	current_seed = seed_to_use if seed_to_use >= 0 else _random_seed()
 	rng = RandomNumberGenerator.new()
-	rng.seed = current_seed   # ALL randomness below goes through `rng` => reproducible
+	rng.seed = current_seed # ALL randomness below goes through `rng` => reproducible
 
 	errors.clear()
 	warnings.clear()
@@ -477,7 +496,7 @@ func generate_dungeon(seed_to_use: int = -1) -> void:
 
 	stat_ms = Time.get_ticks_msec() - t_start
 	_count_tiles()
-	_request_redraw() 
+	_request_redraw()
 	_update_hud()
 	_print_report()
 	dungeon_generated.emit(generation_ok, current_seed)
@@ -554,7 +573,7 @@ func _place_rooms() -> void:
 			placed = true
 			break
 		if not placed:
-			break  # dungeon is full; stop trying for this attempt
+			break # dungeon is full; stop trying for this attempt
 
 
 func _room_conflicts(candidate: Rect2i, gap: int) -> bool:
@@ -647,7 +666,7 @@ func _connect_rooms() -> void:
 	if rooms.size() < 2:
 		return
 	for edge in _plan_spanning_edges():
-		_try_add_connection(edge.x, edge.y, false)   # failures are repaired below
+		_try_add_connection(edge.x, edge.y, false) # failures are repaired below
 	_ensure_connectivity()
 	_add_extra_connections()
 
@@ -702,7 +721,7 @@ func _room_distance(a: DungeonRoom, b: DungeonRoom) -> float:
 func _try_add_connection(i: int, j: int, is_extra: bool) -> bool:
 	var conn: Connection
 	if is_extra:
-		conn = _try_join(rooms[i], rooms[j])   # loops reuse existing corridors, no new doors
+		conn = _try_join(rooms[i], rooms[j]) # loops reuse existing corridors, no new doors
 	else:
 		conn = _try_connect(rooms[i], rooms[j], false)
 	if conn == null:
@@ -729,7 +748,7 @@ func _ensure_connectivity() -> void:
 				if labels[i] != labels[j]:
 					pairs.append([_room_distance(rooms[i], rooms[j]), i, j])
 		if pairs.is_empty():
-			return  # fully connected
+			return # fully connected
 		pairs.sort_custom(func(p, q): return p[0] < q[0])
 
 		var linked := false
@@ -742,7 +761,7 @@ func _ensure_connectivity() -> void:
 				linked = true
 				break
 		if not linked:
-			return  # genuinely stuck; validation will report it
+			return # genuinely stuck; validation will report it
 
 
 # Optional loops: nearby rooms that are NOT yet linked and are far apart in the tree.
@@ -778,7 +797,7 @@ func _add_extra_connections() -> void:
 			continue
 		var hops := _hop_distance(pair.x, pair.y)
 		if hops < EXTRA_MIN_HOP_DISTANCE:
-			continue  # too close in the tree (trivial loop) or unreachable
+			continue # too close in the tree (trivial loop) or unreachable
 		if _try_add_connection(pair.x, pair.y, true):
 			added += 1
 
@@ -804,7 +823,7 @@ func _list_door_options(room: DungeonRoom) -> Array[DoorOption]:
 	var m := door_corner_margin
 
 	for side in DIRS:
-		var wall_runs_along_x := side.x == 0   # UP / DOWN walls run along x
+		var wall_runs_along_x := side.x == 0 # UP / DOWN walls run along x
 		var first := (r.position.x if wall_runs_along_x else r.position.y) + m
 		var last := (r.end.x if wall_runs_along_x else r.end.y) - w - m
 		var along := Vector2i(1, 0) if wall_runs_along_x else Vector2i(0, 1)
@@ -952,11 +971,11 @@ func _find_corridor_path(door_a: DoorOption, door_b: DoorOption) -> Array[Vector
 	var cell_count := dungeon_width * dungeon_height
 	var start := door_a.anchor
 	var goal := door_b.anchor
-	var start_dir := DIRS.find(door_a.side)    # leaving door A: straight outward is free
-	var goal_dir := DIRS.find(-door_b.side)    # entering door B: moving toward the room is free
+	var start_dir := DIRS.find(door_a.side) # leaving door A: straight outward is free
+	var goal_dir := DIRS.find(-door_b.side) # entering door B: moving toward the room is free
 	var start_idx := start.y * w + start.x
 	var goal_idx := goal.y * w + goal.x
-	var terminal := cell_count * 4             # virtual node meaning "arrived and accepted"
+	var terminal := cell_count * 4 # virtual node meaning "arrived and accepted"
 
 	var g := PackedFloat32Array()
 	g.resize(cell_count * 4 + 1)
@@ -1028,7 +1047,7 @@ func _find_corridor_path(door_a: DoorOption, door_b: DoorOption) -> Array[Vector
 				came[ns] = s
 				heap.push(ng + HEURISTIC_WEIGHT * float(absi(goal.x - nx) + absi(goal.y - ny)), ns)
 
-	return result  # empty = no valid route
+	return result # empty = no valid route
 
 
 # Loop corridor: starts on an existing corridor of room A and ends on an existing
@@ -1188,7 +1207,7 @@ func _find_join_path(sources: Array[Vector2i], goals: Array[Vector2i]) -> Array[
 				came[ns] = st
 				heap.push(ng, ns)
 
-	return result  # empty = no valid join
+	return result # empty = no valid join
 
 # Cost of placing a corridor block at (ax, ay), based on existing corridors.
 func _compute_base_cost(ax: int, ay: int) -> float:
@@ -1197,12 +1216,12 @@ func _compute_base_cost(ax: int, ay: int) -> float:
 	for dy in range(w):
 		var row := (ay + dy) * dungeon_width + ax
 		for dx in range(w):
-			if tiles[row + dx] >= T_CORRIDOR:   # corridor or door
+			if tiles[row + dx] >= T_CORRIDOR: # corridor or door
 				overlap += 1
 	if overlap == w * w:
-		return COST_REUSE      # perfectly on an existing corridor: junctions stay tidy
+		return COST_REUSE # perfectly on an existing corridor: junctions stay tidy
 	if overlap > 0:
-		return COST_PARTIAL    # partial overlap: normal at crossings, discouraged for long runs
+		return COST_PARTIAL # partial overlap: normal at crossings, discouraged for long runs
 
 	# Fresh ground. Penalise running flush against another corridor, which would
 	# fuse two corridors into one wide hall without a wall between them.
@@ -1229,7 +1248,7 @@ func _anchor_touches_room_ring(ax: int, ay: int) -> bool:
 	for dy in range(-1, w + 1):
 		for dx in range(-1, w + 1):
 			if dx >= 0 and dx < w and dy >= 0 and dy < w:
-				continue  # the block itself
+				continue # the block itself
 			if ring_blocked[(ay + dy) * dungeon_width + ax + dx] == 1:
 				return true
 	return false
@@ -1447,7 +1466,7 @@ func _assign_roles() -> void:
 
 	if best_i < 0:
 		best_i = 0
-		best_j = n - 1   # disconnected fallback; validation reports the real problem
+		best_j = n - 1 # disconnected fallback; validation reports the real problem
 		best_d = 0.0
 
 	# Start on the left-most of the pair, exit on the other.
@@ -1855,10 +1874,10 @@ func _resolve_layers() -> void:
 		wall_layer = get_node_or_null("WallLayer") as TileMapLayer
 	for layer in [floor_layer, wall_layer]:
 		if layer != null:
-			layer.position = Vector2.ZERO   # cell (x, y) must sit at pixel (x, y) * tile_size
-			layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # crisp pixel art
+			layer.position = Vector2.ZERO # cell (x, y) must sit at pixel (x, y) * tile_size
+			layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST # crisp pixel art
 	if floor_layer != null:
-		floor_layer.collision_enabled = false   # floors/doors/corridors never block
+		floor_layer.collision_enabled = false # floors/doors/corridors never block
 
 
 func _create_overlay() -> void:
@@ -1866,7 +1885,7 @@ func _create_overlay() -> void:
 		return
 	_overlay = Node2D.new()
 	_overlay.name = "DebugOverlay"
-	add_child(_overlay)   # added after the layers => drawn above them
+	add_child(_overlay) # added after the layers => drawn above them
 	_overlay.draw.connect(_draw_overlay)
 
 

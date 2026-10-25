@@ -72,16 +72,16 @@ signal dungeon_generated(success: bool, used_seed: int)
 ## Source ID of the atlas inside the FloorLayer's TileSet. -1 = not configured.
 @export var floor_source_id: int = 0
 ## Atlas coordinates of the tiles to use. Several entries = random variation per tile.
-@export var room_floor_tiles: Array[Vector2i] = [Vector2i(1, 1)]
-@export var corridor_floor_tiles: Array[Vector2i] = [Vector2i(9, 5), Vector2i(10,5)]
-@export var door_floor_tiles: Array[Vector2i] = [Vector2i(13,4)]
+@export var room_floor_tiles: Array[Vector2i] = [Vector2i(0,0), Vector2i(1,0), Vector2i(2,0)]
+@export var corridor_floor_tiles: Array[Vector2i] = [Vector2i(3, 0), Vector2i(4,0)]
+@export var door_floor_tiles: Array[Vector2i] = [Vector2i(5,0)]
 
 @export_group("Wall tiles (you must fill these in)")
 @export var wall_source_id: int = 0
 ## Used for walls that touch a floor tile on a side (wall_grid == 2).
-@export var wall_face_tiles: Array[Vector2i] = [Vector2i(1, 0)]
+@export var wall_face_tiles: Array[Vector2i] = [Vector2i(6, 0)]
 ## Used for diagonal-only walls (wall_grid == 1). If empty, wall_face_tiles is used.
-@export var wall_corner_tiles: Array[Vector2i] = [Vector2i(3, 0)]
+@export var wall_corner_tiles: Array[Vector2i] = [Vector2i(7, 0)]
 ## ON = pick walls by neighbour layout using the two tables below.
 @export var use_wall_variants: bool = false
 
@@ -150,27 +150,16 @@ const UNSET_TILE := Vector2i(-1, -1)
 # truly "missing" rather than defaulting to atlas (0, 0). Keys/bits are described in
 # the section "Wall variants" of the explanation. Example entry: 1: Vector2i(3, 0),
 var wall_variant_by_mask: Dictionary = {
-	1: Vector2i(1, 2), #North (Floor Direction)
-	2: Vector2i(0, 1), #East
-	4: Vector2i(1, 0), #South
-	8: Vector2i(2, 1), #West
-	3: Vector2i(0, 2), #NE
-	6: Vector2i(0, 0), #SE
-	12: Vector2i(2, 0), #SW
-	9: Vector2i(2, 2), #NW
-	5: Vector2i(1, 2), #NS
-	10: Vector2i(2, 1), #EW
-	7: Vector2i(9, 3), #Floor is 3 or four sides
-	11: Vector2i(9, 3), #||
-	13: Vector2i(9, 3), #||
-	14: Vector2i(9, 3), #||
-	15: Vector2i(9, 3)  #||
+	1: Vector2i(1, 1),  2: Vector2i(2, 1),  3: Vector2i(3, 1),  4: Vector2i(4, 1),
+	5: Vector2i(5, 1),  6: Vector2i(6, 1),  7: Vector2i(7, 1),  8: Vector2i(8, 1),
+	9: Vector2i(9, 1), 10: Vector2i(10, 1), 11: Vector2i(11, 1), 12: Vector2i(12, 1),
+	13: Vector2i(13, 1), 14: Vector2i(14, 1), 15: Vector2i(15, 1),
 }
 var wall_variant_by_diagonal: Dictionary = {
-	1: Vector2i(0, 2), #NE (Floor direction)
-	2: Vector2i(0, 0), #SE
-	4: Vector2i(2, 0), #SW
-	8: Vector2i(2, 2)  #NW
+	1: Vector2i(1, 2),  2: Vector2i(2, 2),  3: Vector2i(3, 2),  4: Vector2i(4, 2),
+	5: Vector2i(5, 2),  6: Vector2i(6, 2),  7: Vector2i(7, 2),  8: Vector2i(8, 2),
+	9: Vector2i(9, 2), 10: Vector2i(10, 2), 11: Vector2i(11, 2), 12: Vector2i(12, 2),
+	13: Vector2i(13, 2), 14: Vector2i(14, 2), 15: Vector2i(15, 2),
 }
 
 var _overlay: Node2D

@@ -322,6 +322,7 @@ func _create_hud() -> void:
 		return # never create the UI twice
 
 	hud = PanelContainer.new()
+	hud.z_index = 100
 	hud.position = Vector2(8, 8)
 	hud.visible = show_hud
 	var style := StyleBoxFlat.new()

@@ -277,6 +277,7 @@ var stat_error_overflow: int = 0
 
 # HUD
 var hud: PanelContainer
+var hud_layer: CanvasLayer
 var regenerate_button: Button
 var seed_edit: LineEdit
 var status_label: Label
@@ -322,7 +323,7 @@ func _create_hud() -> void:
 		return # never create the UI twice
 
 	hud = PanelContainer.new()
-	hud.z_index = 100
+	
 	hud.position = Vector2(8, 8)
 	hud.visible = show_hud
 	var style := StyleBoxFlat.new()
@@ -360,7 +361,10 @@ func _create_hud() -> void:
 	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(stats_label)
 
-	add_child(hud)
+	hud_layer = CanvasLayer.new()
+	hud_layer.layer = 10
+	add_child(hud_layer)
+	hud_layer.add_child(hud)
 
 
 func _on_seed_submitted(text: String) -> void:

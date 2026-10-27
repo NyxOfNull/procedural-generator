@@ -85,6 +85,16 @@ signal dungeon_generated(success: bool, used_seed: int)
 ## ON = pick walls by neighbour layout using the two tables below.
 @export var use_wall_variants: bool = false
 
+
+@export_group("Batch Test")
+## Run the batch test automatically when the game starts.
+@export var run_batch_on_start: bool = false
+@export_range(10, 20000) var batch_seed_count: int = 1000
+@export var batch_first_seed: int = 1
+## Generate every seed twice and compare the results (proves same seed = same dungeon).
+@export var batch_check_reproducibility: bool = true
+## B = start / cancel the batch test while the game runs. Esc also cancels.
+@export var batch_hotkey_enabled: bool = true
 # ------------------------------------------------------------------
 # Visual style
 # ------------------------------------------------------------------
@@ -145,6 +155,15 @@ const TURNS: Array[int] = [0, 1, 3]
 
 
 const UNSET_TILE := Vector2i(-1, -1)
+
+
+
+const BATCH_YIELD_MS := 100        # let the window breathe every ~100 ms during a batch
+const BATCH_MAX_LISTED := 15       # how many failing seeds to list in the report
+
+var _batch_running: bool = false
+var _batch_mode: bool = false      # true only while a batch run is generating (skips rendering/HUD/signal)
+var _batch_cancel: bool = false
 
 # Optional wall variants. Filled IN CODE (not the Inspector) so unfilled entries are
 # truly "missing" rather than defaulting to atlas (0, 0). Keys/bits are described in
@@ -294,6 +313,8 @@ func _ready() -> void:
 	
 	var first_seed := fixed_seed if use_fixed_seed else _random_seed()
 	generate_dungeon(first_seed)
+	if run_batch_on_start:
+		run_batch_test.call_deferred()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -316,6 +337,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_H:
 			if hud != null:
 				hud.visible = not hud.visible
+		KEY_B:
+			if batch_hotkey_enabled:
+				if _batch_running:
+					_batch_cancel = true
+				else:
+					run_batch_test()
+		KEY_ESCAPE:
+			if _batch_running:
+				_batch_cancel = true
 
 
 func _create_hud() -> void:
@@ -420,6 +450,8 @@ func is_walkable_tile(cell: Vector2i) -> bool:
 # ==================================================================
 
 func generate_dungeon(seed_to_use: int = -1) -> void:
+	if _batch_running and not _batch_mode:
+		return
 	var t_start := Time.get_ticks_msec()
 	current_seed = seed_to_use if seed_to_use >= 0 else _random_seed()
 	rng = RandomNumberGenerator.new()
@@ -485,11 +517,14 @@ func generate_dungeon(seed_to_use: int = -1) -> void:
 	_compute_walls()
 	_assign_roles()
 	_validate_layout()
-	_render_tilemaps()
+	if not _batch_mode:
+		_render_tilemaps()
 	_finalize_status(complete, pruned)
 
 	stat_ms = Time.get_ticks_msec() - t_start
 	_count_tiles()
+	if _batch_mode:
+		return   # batch test: no redraw, HUD, console report or signal
 	_request_redraw()
 	_update_hud()
 	_print_report()
@@ -1639,6 +1674,181 @@ func _count_tiles() -> void:
 			stat_corridor_tiles += 1
 		elif t == T_DOOR:
 			stat_door_tiles += 1
+
+
+# ==================================================================
+# BATCH TEST
+# Generates many seeds with the REAL generator and reports statistics.
+# ==================================================================
+
+# A fingerprint of a finished layout: floor tiles, start/exit and corridor links.
+func _layout_signature() -> int:
+	var s := tiles.hex_encode() + "|%d|%d|%d" % [rooms.size(), start_room_id, exit_room_id]
+	for conn in connections:
+		s += "|%d-%d-%d" % [conn.a, conn.b, int(conn.is_extra)]
+	return s.hash()
+
+
+func run_batch_test() -> void:
+	if _batch_running:
+		return
+	_batch_running = true
+	_batch_cancel = false
+
+	var restore_seed := current_seed
+	var total := maxi(1, batch_seed_count)
+	var first := maxi(0, batch_first_seed)
+
+	var done := 0
+	var n_ok := 0
+	var n_partial := 0
+	var n_invalid := 0
+	var n_full_rooms := 0
+	var n_repro_fail := 0
+	var rooms_sum := 0
+	var rooms_min := 999999
+	var rooms_max := 0
+	var attempts_sum := 0
+	var attempts_max := 0
+	var loops_sum := 0
+	var corridor_sum := 0
+	var route_fail_sum := 0
+	var dist_sum := 0.0
+	var ms_list: Array[int] = []
+	var invalid_lines: Array[String] = []
+	var partial_lines: Array[String] = []
+	var repro_lines: Array[String] = []
+	var t_begin := Time.get_ticks_msec()
+	var last_yield := t_begin
+
+	for k in range(total):
+		if _batch_cancel:
+			break
+		var seed_value := first + k
+
+		_batch_mode = true
+		generate_dungeon(seed_value)
+		_batch_mode = false
+
+		# ---- record this run ----
+		done += 1
+		var room_n := rooms.size()
+		var loops := 0
+		for conn in connections:
+			if conn.is_extra:
+				loops += 1
+		rooms_sum += room_n
+		rooms_min = mini(rooms_min, room_n)
+		rooms_max = maxi(rooms_max, room_n)
+		if room_n >= room_count:
+			n_full_rooms += 1
+		attempts_sum += stat_attempts
+		attempts_max = maxi(attempts_max, stat_attempts)
+		loops_sum += loops
+		corridor_sum += connections.size()
+		route_fail_sum += failed_route_searches
+		dist_sum += start_exit_distance
+		ms_list.append(stat_ms)
+
+		if not errors.is_empty():
+			n_invalid += 1
+			if invalid_lines.size() < BATCH_MAX_LISTED:
+				invalid_lines.append("seed %d: %s" % [seed_value, errors[0]])
+		elif not generation_ok:
+			n_partial += 1
+			if partial_lines.size() < BATCH_MAX_LISTED:
+				partial_lines.append("seed %d: %d/%d rooms" % [seed_value, room_n, room_count])
+		else:
+			n_ok += 1
+
+		# ---- reproducibility: same seed must give an identical layout ----
+		if batch_check_reproducibility:
+			var first_signature := _layout_signature()
+			_batch_mode = true
+			generate_dungeon(seed_value)
+			_batch_mode = false
+			if _layout_signature() != first_signature:
+				n_repro_fail += 1
+				if repro_lines.size() < BATCH_MAX_LISTED:
+					repro_lines.append("seed %d produced two different dungeons" % seed_value)
+
+		# ---- keep the window responsive and show progress ----
+		if Time.get_ticks_msec() - last_yield >= BATCH_YIELD_MS:
+			last_yield = Time.get_ticks_msec()
+			if status_label != null:
+				status_label.text = "Batch test: %d / %d seeds  (B or Esc = cancel)" % [done, total]
+			await get_tree().process_frame
+
+	_batch_mode = false
+	var elapsed_s := (Time.get_ticks_msec() - t_begin) / 1000.0
+	var cancelled := _batch_cancel
+	_batch_running = false
+	_batch_cancel = false
+
+	if done == 0:
+		generate_dungeon(restore_seed)
+		return
+
+	ms_list.sort()
+	var ms_sum := 0
+	for v in ms_list:
+		ms_sum += v
+	var p95 := ms_list[int((ms_list.size() - 1) * 0.95)]
+	var passed := n_invalid == 0 and n_repro_fail == 0
+
+	var headline := "BATCH %s: %d seeds | OK %d, PARTIAL %d, INVALID %d | reproducibility failures %d" % [
+		"PASS" if passed else "FAIL", done, n_ok, n_partial, n_invalid, n_repro_fail]
+
+	var r := PackedStringArray()
+	r.append("=== AP2DS BATCH TEST ===")
+	r.append(headline)
+	if cancelled:
+		r.append("(cancelled early: %d of %d seeds were tested)" % [done, total])
+	r.append("Seeds %d to %d, %.1f s total. Rendering and HUD are skipped, so times are generation only." % [first, first + done - 1, elapsed_s])
+	r.append("Settings: %dx%d grid, %d rooms (size %d-%d), spacing %d, corridor width %d, loop chance %.2f (max %d)" % [
+		dungeon_width, dungeon_height, room_count, min_room_size, max_room_size, room_spacing,
+		corridor_width, extra_connection_chance, max_extra_connections])
+	r.append("")
+	r.append("OK      (valid and complete): %d  (%.1f%%)" % [n_ok, 100.0 * n_ok / done])
+	r.append("PARTIAL (valid, fewer rooms): %d  (%.1f%%)" % [n_partial, 100.0 * n_partial / done])
+	r.append("INVALID (failed validation): %d  (%.1f%%)" % [n_invalid, 100.0 * n_invalid / done])
+	if batch_check_reproducibility:
+		r.append("Reproducibility failures: %d of %d" % [n_repro_fail, done])
+	r.append("Dungeons with all %d rooms: %d" % [room_count, n_full_rooms])
+	r.append("")
+	r.append("Rooms per dungeon: avg %.2f, min %d, max %d" % [float(rooms_sum) / done, rooms_min, rooms_max])
+	r.append("Corridors per dungeon: avg %.2f (avg loops %.2f)" % [float(corridor_sum) / done, float(loops_sum) / done])
+	r.append("Attempts used: avg %.2f, max %d (limit %d)" % [float(attempts_sum) / done, attempts_max, max_generation_attempts])
+	r.append("Failed route searches per dungeon: avg %.2f" % (float(route_fail_sum) / done))
+	r.append("Start-to-exit route: avg %.1f tiles" % (dist_sum / done))
+	r.append("Generation time: avg %.1f ms, 95th percentile %d ms, max %d ms" % [float(ms_sum) / done, p95, ms_list[ms_list.size() - 1]])
+	if not invalid_lines.is_empty():
+		r.append("")
+		r.append("INVALID seeds (first %d):" % invalid_lines.size())
+		r.append_array(PackedStringArray(invalid_lines))
+	if not partial_lines.is_empty():
+		r.append("")
+		r.append("PARTIAL seeds (first %d):" % partial_lines.size())
+		r.append_array(PackedStringArray(partial_lines))
+	if not repro_lines.is_empty():
+		r.append("")
+		r.append("NON-REPRODUCIBLE seeds (first %d):" % repro_lines.size())
+		r.append_array(PackedStringArray(repro_lines))
+
+	var report := "\n".join(r)
+	print(report)
+	var file := FileAccess.open("user://batch_report.txt", FileAccess.WRITE)
+	if file != null:
+		file.store_string(report)
+		file.close()
+		print("[Batch] Report saved to ", ProjectSettings.globalize_path("user://batch_report.txt"))
+
+	# Put the normal dungeon back and show a short summary in the HUD.
+	generate_dungeon(restore_seed)
+	if stats_label != null:
+		stats_label.text += "\n\n" + headline
+
+
 
 # ==================================================================
 # REPORTING / HUD

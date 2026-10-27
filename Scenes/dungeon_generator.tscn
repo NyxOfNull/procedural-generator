@@ -7,13 +7,11 @@
 
 [node name="DungeonGenerator" type="Node2D" unique_id=1014127506 node_paths=PackedStringArray("floor_layer", "wall_layer")]
 script = ExtResource("1_x1wjd")
-room_count = 10
-max_room_placement_attempts = 363
-corridor_width = 1
-max_extra_connections = 8
+min_room_size = 8
 floor_layer = NodePath("FloorLayer")
 wall_layer = NodePath("WallLayer")
 use_wall_variants = true
+run_batch_on_start = true
 
 [node name="FloorLayer" type="TileMapLayer" parent="." unique_id=1287089869]
 tile_set = ExtResource("2_mvshf")
@@ -26,5 +24,5 @@ script = ExtResource("3_iim3m")
 
 [node name="Camera" type="Camera2D" parent="Player" unique_id=562362800]
 script = ExtResource("4_76stw")
-follow_zoom = 8.0
+follow_zoom = 1.0
 smoothing_speed = 3.877
